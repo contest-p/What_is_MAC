@@ -13,6 +13,8 @@ import time
 # ==================================================
 EPSILON = 1e-9  # 두 점수 차이가 이보다 작으면 "동점"으로 본다 (부동소수점 오차 대비)
 REPEAT = 10      # 성능 측정 반복 횟수
+UNDECIDED = "UNDECIDED"          # 동점일 때의 판정값
+PERF_SIZES = [3, 5, 13, 25]      # 성능 분석에 사용할 크기 목록
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.json")
 
 # 라벨 정규화 표: 데이터마다 제각각인 표기를 프로그램 내부 "표준 라벨" 2개로 통일
@@ -50,7 +52,7 @@ def judge(score_a, score_b, label_a="A", label_b="B"):
     - 아니면 점수가 큰 쪽의 라벨을 반환
     """
     if abs(score_a - score_b) < EPSILON:
-        return "UNDECIDED"
+        return UNDECIDED
     return label_a if score_a > score_b else label_b
 
 
@@ -77,6 +79,22 @@ def make_x(n):
 
 
 # ==================================================
+# [보너스] 1차원 배열 최적화
+# ==================================================
+def flatten(m):
+    """N×N 2차원 배열을 길이 N²의 1차원 배열로 편다. (i행 j열 → 인덱스 i*N + j)"""
+    return [v for row in m for v in row]
+
+
+def mac_flat(a, b):
+    """1차원 배열용 MAC: 행/열 이중 반복 대신 반복문 하나로 N²번 곱하고 더한다."""
+    total = 0.0
+    for k in range(len(a)):
+        total += a[k] * b[k]
+    return total
+
+
+# ==================================================
 # 공통 출력 / 성능 측정 도구
 # ==================================================
 def print_section(title):
@@ -91,14 +109,14 @@ def print_matrix(m):
         print("  " + " ".join(f"{v:g}" for v in row))
 
 
-def measure_mac_ms(pattern, filt, repeat=REPEAT):
+def measure_ms(func, a, b, repeat=REPEAT):
     """
-    MAC 연산만 repeat번 반복 실행해 평균 시간(ms)을 잰다.
+    연산 함수 func(a, b)만 repeat번 반복 실행해 평균 시간(ms)을 잰다.
     입력/출력/파일 읽기 시간은 빼고 '연산 함수 호출 구간'만 측정한다.
     """
     start = time.perf_counter()
     for _ in range(repeat):
-        mac(pattern, filt)
+        func(a, b)
     end = time.perf_counter()
     return (end - start) / repeat * 1000   # 초 → ms
 
@@ -109,9 +127,31 @@ def print_perf_table(sizes):
     print("-" * 58)
     for n in sizes:
         pattern, filt = make_cross(n), make_x(n)   # 생성기로 동일 조건 입력 생성
-        avg = measure_mac_ms(pattern, filt)
+        avg = measure_ms(mac, pattern, filt)
         per_op_us = avg * 1000 / (n * n)           # 곱셈 1번당 시간 → 거의 일정하면 O(N²)
         print(f"{f'{n}×{n}':<10}{avg:>16.4f}{n * n:>16}{per_op_us:>14.4f}")
+
+
+def print_optimization_table(sizes):
+    """[보너스] 같은 입력·같은 반복 횟수로 2차원(mac) vs 1차원(mac_flat) 속도를 비교한다."""
+    print(f"{'크기':<10}{'2차원(ms)':>14}{'1차원(ms)':>14}{'속도 향상':>12}")
+    print("-" * 50)
+    for n in sizes:
+        pattern, filt = make_cross(n), make_x(n)
+        flat_p, flat_f = flatten(pattern), flatten(filt)   # 변환은 측정 구간 밖에서 1번만
+        t2d = measure_ms(mac, pattern, filt)
+        t1d = measure_ms(mac_flat, flat_p, flat_f)
+        ratio = t2d / t1d if t1d > 0 else float("inf")
+        print(f"{f'{n}×{n}':<10}{t2d:>14.4f}{t1d:>14.4f}{ratio:>11.2f}배")
+
+
+def ask_choice(prompt):
+    """'1' 또는 '2'를 입력할 때까지 다시 묻는다."""
+    while True:
+        choice = input(f"{prompt}: ").strip()
+        if choice in ("1", "2"):
+            return choice
+        print("1 또는 2를 입력하세요.")
 
 
 # ==================================================
@@ -144,9 +184,12 @@ def run_user_mode():
     n = 3
 
     print_section("[1] 필터 입력")
-    filter_a = read_matrix("필터 A", n)
-    print()
-    filter_b = read_matrix("필터 B", n)
+    if ask_choice("필터 입력 방식 (1: 직접 입력, 2: 패턴 생성기로 자동 생성)") == "1":
+        filter_a = read_matrix("필터 A", n)
+        print()
+        filter_b = read_matrix("필터 B", n)
+    else:
+        filter_a, filter_b = make_cross(n), make_x(n)   # 보너스: A=Cross, B=X 자동 생성
     print("\n✓ 필터 저장 완료")
     print(" 필터 A:"); print_matrix(filter_a)
     print(" 필터 B:"); print_matrix(filter_b)
@@ -157,13 +200,13 @@ def run_user_mode():
     print_section("[3] MAC 결과")
     score_a = mac(pattern, filter_a)
     score_b = mac(pattern, filter_b)
-    avg_ms = measure_mac_ms(pattern, filter_a)
+    avg_ms = measure_ms(mac, pattern, filter_a)
     print(f"A 점수: {score_a}")
     print(f"B 점수: {score_b}")
     print(f"연산 시간(평균/{REPEAT}회): {avg_ms:.4f} ms")
     result = judge(score_a, score_b, "A", "B")
-    if result == "UNDECIDED":
-        print("판정: 판정 불가 (|A-B| < 1e-9)")
+    if result == UNDECIDED:
+        print(f"판정: 판정 불가 (|A-B| < {EPSILON})")
     else:
         print(f"판정: {result}")
 
@@ -199,7 +242,10 @@ def check_square(m, n):
 def load_filters(data):
     """filters 섹션을 읽어 {N: {'Cross': 행렬, 'X': 행렬}} 형태로 돌려준다."""
     filters = {}
-    raw_filters = data.get("filters", {}) if isinstance(data, dict) else {}
+    raw_filters = data.get("filters") if isinstance(data, dict) else None
+    if not isinstance(raw_filters, dict):
+        print("✗ filters 섹션이 없거나 형식 오류 (객체 {} 형태여야 함)")
+        return filters
     for size_key, group in raw_filters.items():
         m = re.fullmatch(r"size_(\d+)", str(size_key))
         if not m or not isinstance(group, dict):
@@ -266,8 +312,8 @@ def analyze_case(key, item, filters):
     if result == expected:
         print("PASS")
         return {"key": key, "passed": True, "reason": ""}
-    if result == "UNDECIDED":
-        return fail(f"동점 규칙 - |Cross-X| < 1e-9 ({score_c} vs {score_x})")
+    if result == UNDECIDED:
+        return fail(f"동점 규칙 - |Cross-X| < {EPSILON} ({score_c} vs {score_x})")
     return fail(f"오판정 - 판정 {result}, expected {expected}")
 
 
@@ -276,18 +322,17 @@ def run_json_mode(path=DATA_PATH):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except FileNotFoundError:
-        print(f"✗ 파일을 찾을 수 없습니다: {path}")
-        print_summary([])
-        return []
-    except json.JSONDecodeError as e:
-        print(f"✗ JSON 형식 오류: {e}")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"✗ data.json을 읽을 수 없습니다: {e}")
         print_summary([])
         return []
     filters = load_filters(data)
 
     print_section("[2] 패턴 분석 (라벨 정규화 적용)")
-    patterns = data.get("patterns", {}) if isinstance(data, dict) else {}
+    patterns = data.get("patterns") if isinstance(data, dict) else None
+    if not isinstance(patterns, dict):
+        print("✗ patterns 섹션이 없거나 형식 오류 (객체 {} 형태여야 함)")
+        patterns = {}
     results = []
     for key, item in patterns.items():
         try:
@@ -297,9 +342,12 @@ def run_json_mode(path=DATA_PATH):
             results.append({"key": key, "passed": False, "reason": f"예기치 못한 오류: {e}"})
 
     print_section(f"[3] 성능 분석 (평균/{REPEAT}회)")
-    print_perf_table([3, 5, 13, 25])
+    print_perf_table(PERF_SIZES)
 
-    print_section("[4] 결과 요약")
+    print_section(f"[4] 보너스: 2차원 vs 1차원 배열 비교 (평균/{REPEAT}회)")
+    print_optimization_table(PERF_SIZES)
+
+    print_section("[5] 결과 요약")
     print_summary(results)
     return results
 
@@ -333,13 +381,7 @@ def main():
     print("[모드 선택]")
     print("1. 사용자 입력 (3x3)")
     print("2. data.json 분석")
-    while True:
-        choice = input("선택: ").strip()
-        if choice in ("1", "2"):
-            break
-        print("1 또는 2를 입력하세요.")
-
-    if choice == "1":
+    if ask_choice("선택") == "1":
         run_user_mode()
     else:
         run_json_mode()
