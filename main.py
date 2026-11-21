@@ -105,12 +105,13 @@ def measure_mac_ms(pattern, filt, repeat=REPEAT):
 
 def print_perf_table(sizes):
     """크기 목록을 받아 '크기 / 평균 시간(ms) / 연산 횟수(N²)' 표를 출력한다."""
-    print(f"{'크기':<10}{'평균 시간(ms)':>16}{'연산 횟수(N²)':>16}")
-    print("-" * 44)
+    print(f"{'크기':<10}{'평균 시간(ms)':>16}{'연산 횟수(N²)':>16}{'1회당(μs)':>14}")
+    print("-" * 58)
     for n in sizes:
         pattern, filt = make_cross(n), make_x(n)   # 생성기로 동일 조건 입력 생성
         avg = measure_mac_ms(pattern, filt)
-        print(f"{f'{n}×{n}':<10}{avg:>16.4f}{n * n:>16}")
+        per_op_us = avg * 1000 / (n * n)           # 곱셈 1번당 시간 → 거의 일정하면 O(N²)
+        print(f"{f'{n}×{n}':<10}{avg:>16.4f}{n * n:>16}{per_op_us:>14.4f}")
 
 
 # ==================================================
@@ -277,9 +278,11 @@ def run_json_mode(path=DATA_PATH):
             data = json.load(f)
     except FileNotFoundError:
         print(f"✗ 파일을 찾을 수 없습니다: {path}")
+        print_summary([])
         return []
     except json.JSONDecodeError as e:
         print(f"✗ JSON 형식 오류: {e}")
+        print_summary([])
         return []
     filters = load_filters(data)
 
@@ -292,7 +295,33 @@ def run_json_mode(path=DATA_PATH):
         except Exception as e:   # 예상 못 한 오류도 케이스 단위 FAIL로 처리 (프로그램 중단 방지)
             print(f"FAIL (예기치 못한 오류: {e})")
             results.append({"key": key, "passed": False, "reason": f"예기치 못한 오류: {e}"})
+
+    print_section(f"[3] 성능 분석 (평균/{REPEAT}회)")
+    print_perf_table([3, 5, 13, 25])
+
+    print_section("[4] 결과 요약")
+    print_summary(results)
     return results
+
+
+# ==================================================
+# [5단계] 결과 요약
+# ==================================================
+def print_summary(results):
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    failed = total - passed
+    print(f"총 테스트: {total}개")
+    print(f"통과: {passed}개")
+    print(f"실패: {failed}개")
+    if failed:
+        print()
+        print("실패 케이스:")
+        for r in results:
+            if not r["passed"]:
+                print(f"- {r['key']}: {r['reason']}")
+    print()
+    print('(상세 원인 분석 및 복잡도 설명은 README.md의 "결과 리포트" 섹션 참고)')
 
 
 # ==================================================
